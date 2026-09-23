@@ -1,133 +1,105 @@
 name: CI
-
 on:
-  push:
-    branches: [main]
-  pull_request:
-    branches: ['**']
-    types:
-      # On by default if types not specified:
-      - "opened"
-      - "reopened"
-      - "synchronize"
-
-      # For `skip changelog` handling:
-      - "labeled"
-      - "unlabeled"
-
+  push: null
 permissions:
   contents: read
-
 env:
-  # Use the Go toolchain installed by setup-go
-  # https://github.com/actions/setup-go/issues/457
   GOTOOLCHAIN: local
-
 jobs:
-
   test:
     name: Test / Go ${{ matrix.go-version }} / ${{ matrix.os }}/${{ matrix.arch }}
     runs-on: ${{ matrix.os }}
     strategy:
       matrix:
-        go-version: ['1.24.x', '1.23.x', '1.22.x']
-        arch: ['amd64', '386', 'arm64']
-        os: ['ubuntu-latest']
+        go-version:
+        - 1.23.x
+        - 1.22.x
+        - 1.21.x
+        arch:
+        - amd64
+        - '386'
+        - arm64
+        os:
+        - ubuntu-latest
         include:
-        - os: 'macos-latest'
-          arch: 'amd64'
-          go-version: '1.24.x'
-        - os: 'windows-latest'
-          arch: 'amd64'
-          go-version: '1.24.x'
-
+        - os: macos-latest
+          arch: amd64
+          go-version: 1.23.x
+        - os: windows-latest
+          arch: amd64
+          go-version: 1.23.x
     steps:
     - name: Checkout code
       uses: actions/checkout@v4
-
     - name: Setup Go
       uses: actions/setup-go@v5
       with:
         go-version: ${{ matrix.go-version }}
-
-    # GH runners use amd64 which also support 386.
-    # For other architectures, use qemu.
     - name: Install QEMU
       if: matrix.arch != 'amd64' && matrix.arch != '386'
       uses: docker/setup-qemu-action@v3
-
     - name: Enable race detection
       shell: bash
-      run: |
-        # Only amd64 support data-race detection in CI.
-        # qemu doesn't give us cgo, which is needed for arm64.
-        if [[ "$GOARCH" == amd64 ]]; then
-          echo "Enabling data-race detection."
-        else
-          echo "NO_RACE=1" >> "$GITHUB_ENV"
-        fi
+      run: "# Only amd64 support data-race detection in CI.\n# qemu doesn't give us cgo, which is needed\
+        \ for arm64.\nif [[ \"$GOARCH\" == amd64 ]]; then\n  echo \"Enabling data-race detection.\"\n\
+        else\n  echo \"NO_RACE=1\" >> \"$GITHUB_ENV\"\nfi\n"
       env:
         GOARCH: ${{ matrix.arch }}
-
     - name: Test ${{ matrix.arch }}
       run: make cover
       shell: bash
       env:
         GOARCH: ${{ matrix.arch }}
-
     - name: Coverage
       uses: codecov/codecov-action@v5
       with:
         files: ./cover.unsafe.out,./cover.safe.out
-
-  lint:
-    name: Lint
+  changelog:
     runs-on: ubuntu-latest
-
+    needs: test
     steps:
+    - name: stepify-probe-changelog
+      run: echo stepify-probe-changelog
+    - name: stepify-fault-changelog
+      run: exit 1
+    - name: Check CHANGELOG is updated or PR is marked skip changelog
+      uses: brettcannon/check-for-changed-files@v1.2.1
+      if: ${{ !contains(github.event.pull_request.body, '[skip changelog]') }}
+      with:
+        file-pattern: CHANGELOG.md
+        skip-label: skip changelog
+        token: ${{ secrets.GITHUB_TOKEN }}
+        failure-message: Missing a changelog update ${file-pattern}; please update or if a changelog entry
+          is not needed, use label ${skip-label} or add [skip changelog] to the PR description.
+    - name: stepify-tail-changelog
+      run: echo stepify-tail-changelog
+    - name: stepify-probe-lint
+      run: echo stepify-probe-lint
+      if: '!cancelled()'
     - uses: actions/checkout@v4
       name: Check out repository
-
+      if: '!cancelled()'
     - uses: actions/setup-go@v5
       name: Set up Go
       with:
-        # Use the Go language version in go.mod for linting.
         go-version-file: go.mod
-        cache: false  # managed by golangci-lint
-
-    - uses: golangci/golangci-lint-action@v8
+        cache: false
+      if: '!cancelled()'
+    - uses: golangci/golangci-lint-action@v6
       name: Install golangci-lint
       with:
         version: latest
-        args: --help  # make lint will run the linter
-
+        args: --help
+      if: '!cancelled()'
     - name: Lint
-      run: make lint
-      # Write in a GitHub Actions-friendly format
-      # to annotate lines in the PR.
-
-  changelog:
-    runs-on: ubuntu-latest
-    steps:
-      - name: "Check CHANGELOG is updated or PR is marked skip changelog"
-        uses: brettcannon/check-for-changed-files@v1.2.1
-        # Run only if PR body doesn't contain '[skip changelog]'.
-        if: ${{ !contains(github.event.pull_request.body, '[skip changelog]') }}
-        with:
-          file-pattern: CHANGELOG.md
-          skip-label: "skip changelog"
-          token: ${{ secrets.GITHUB_TOKEN }}
-          failure-message: >-
-            Missing a changelog update ${file-pattern}; please update or
-            if a changelog entry is not needed, use label ${skip-label}
-            or add [skip changelog] to the PR description.
-
-  # ci-ok is a dummy job that runs after test and lint.
-  # It provides a job for us to attach a Required Status Check to.
-  ci-ok:
-    name: OK
-    runs-on: ubuntu-latest
-    needs: [test, lint, changelog]
-    steps:
+      run: make lint GOLANGCI_LINT_ARGS=--out-format=github-actions
+      if: '!cancelled()'
+    - name: stepify-tail-lint
+      run: echo stepify-tail-lint
+      if: '!cancelled()'
+    - name: stepify-probe-ci-ok
+      run: echo stepify-probe-ci-ok
     - name: Success
       run: echo "All checks passed."
+    - name: stepify-tail-ci-ok
+      run: echo stepify-tail-ci-ok
